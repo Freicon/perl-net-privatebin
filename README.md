@@ -29,5 +29,7 @@ Use "encode_and_post()" and "get_and_decode()" methods. They take 1 or 0 as argu
 
 - Documentation
 - Tests
-- Test get method
+- Implement / Test get method
+- Check server capabilities and version
+- Publish
 - ...
