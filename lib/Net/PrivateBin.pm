@@ -254,11 +254,9 @@ sub post_paste {
         if ($self->{debug}) {
             print "Response: ", $res->content, "\n";
         }
-
         if ($result->{status} != 0) {
             croak "PrivateBin request was not successful: " . $result->{message}
         }
-
         return {
             requests_result => $result,
             b58             => $data->{b58},
@@ -282,9 +280,6 @@ sub get_paste {
         $self->{ua}->ssl_opts(SSL_verify_mode => 0x00);
     }
 
-    # remove leading /?
-    $paste_id =~ s:^/?\??::;
-
     # Create a GET request to fetch the paste data
     my $req = HTTP::Request->new(GET => "$self->{url}/?$paste_id");
     $req->header('X-Requested-With' => 'JSONHttpRequest');
@@ -296,6 +291,9 @@ sub get_paste {
         if ($self->{debug}) {
             print "Retrieved paste: ", $res->content, "\n";
         }
+        if ($result->{status} != 0) {
+            croak "PrivateBin request was not successful: " . $result->{message}
+        }
         return $result;
     } else {
         croak "Failed to retrieve paste: " . $res->status_line;
@@ -304,7 +302,7 @@ sub get_paste {
 
 # Method to decrypt the retrieved paste
 sub decode_paste {
-    my ($self, $paste_data, $password) = @_;
+    my ($self, $paste_data, $paste_passphrase) = @_;
 
     # Extract key, nonce, and auth_data from paste_data
     my $nonce = decode_base64($paste_data->{adata}[0][0]);
@@ -327,7 +325,7 @@ sub decode_paste {
         output_len => $key_length / 8
     );
 
-    my $derived_key = $pbkdf2->PBKDF2($salt, $password);
+    my $derived_key = $pbkdf2->PBKDF2($salt, $paste_passphrase);
 
     # Decode the Base64 encoded ciphertext
     my $ciphertext = decode_base64($paste_data->{ct});
@@ -344,7 +342,7 @@ sub decode_paste {
     # Decrypt the data
     my $decrypted_data = $gcm->decrypt_add($encrypted_data);
     if (!$gcm->decrypt_done($tag)) {
-        croak "Failed to verify authentication tag, data might be corrupted or tampered";
+        croak "Failed to verify authentication tag, data might be corrupted or password is wrong.";
     }
 
     # Decompress if necessary
@@ -364,11 +362,22 @@ sub decode_paste {
 
 # Combine getting and decoding one step
 sub get_and_decode {
-    my ($self, $paste_id, $disable_ssl_verification) = @_;
+    my ($self, $paste_path, $disable_ssl_verification) = @_;
+
+    $paste_path =~ /\/?\??(\w+)#-?(\w+)/;
+    my $paste_id = $1;
+    my $pass_key = decode_b58b($2);
+    my $paste_passphrase;
+
+    if (defined $self->{password}) {
+        $paste_passphrase = $pass_key . $self->{password};
+    } else {
+        $paste_passphrase = $pass_key;
+    }
+
     my $paste_data = $self->get_paste($paste_id, $disable_ssl_verification);
-    my $password = $paste_id;
-    $password =~ s/#-?(.*)$/$1/;
-    return $self->decode_paste($paste_data, $password);
+    
+    return $self->decode_paste($paste_data, $paste_passphrase);
 }
 
 # Combine encoding and posting into one step
